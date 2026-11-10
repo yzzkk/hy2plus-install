@@ -18,4 +18,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yzzkk/hy2plus-install/main/i
 
 给现有 HY2 + Salamander 或 HY2 + Gecko 节点加备用域名时，先让新域名解析到同一台 VPS，并使用手动部署、覆盖该域名的 TLS 证书。重新运行安装命令并选 **7**，即可生成新域名的导入链接。生成的链接沿用原节点的端口、认证密码和混淆密码。
 
+卸载时，重新运行上方命令，选择 **9** 并输入 `UNINSTALL`。脚本会停止服务、取消开机启动，移除程序和 systemd 服务文件。配置会移到 `/etc/hy2plus-backup.*/config`，自动签发的证书会保留在 `/var/lib/hy2plus/acme`。
+
 安装包与上游许可证见 [v0.1.0 Release](https://github.com/yzzkk/hy2plus-install/releases/tag/v0.1.0)。
