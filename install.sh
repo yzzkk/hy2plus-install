@@ -141,8 +141,15 @@ socks5:
   listen: "127.0.0.1:1080"
 EOF
   else
-    printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3#hy2\n' \
-      "$proxy_password" "$domain" "$port" "$domain" > "$tmp/client-uri.txt"
+    obfs_password=$(openssl rand -hex 24)
+    cat >> "$tmp/config.yaml" <<EOF
+obfs:
+  type: salamander
+  salamander:
+    password: "$obfs_password"
+EOF
+    printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#hy2\n' \
+      "$proxy_password" "$domain" "$port" "$domain" "$obfs_password" > "$tmp/client-uri.txt"
   fi
 
   "${admin[@]}" install -m 0600 "$cert" "$config_dir/fullchain.pem"
@@ -164,7 +171,7 @@ EOF
 )
 
 printf '\nHY2+ VPS 管理菜单\n'
-printf '%s\n' '1) 安装标准 HY2（输出可导入链接）' '2) 启用并启动已有服务' \
+printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
   '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' '0) 退出'
 read -rp '请选择 [1]：' choice
 case "${choice:-1}" in
