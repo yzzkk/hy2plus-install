@@ -203,12 +203,12 @@ EOF
     obfs_password=$(openssl rand -hex 24)
     cat >> "$tmp/config.yaml" <<EOF
 obfs:
-  type: salamander
-  salamander:
+  type: $mode
+  $mode:
     password: "$obfs_password"
 EOF
-    printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#hy2\n' \
-      "$proxy_password" "$domain" "$port" "$domain" "$obfs_password" > "$tmp/client-uri.txt"
+    printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3&obfs=%s&obfs-password=%s#hy2\n' \
+      "$proxy_password" "$domain" "$port" "$domain" "$mode" "$obfs_password" > "$tmp/client-uri.txt"
   fi
 
   if [[ $cert_mode == 2 ]]; then
@@ -236,7 +236,7 @@ show_domain_alias() {
   require_commands openssl grep
   local uri domain auth port suffix pattern
   if ! "${admin[@]}" test -r "$config_dir/client-uri.txt"; then
-    printf '此选项需要菜单 1 安装生成的 HY2 导入链接。\n' >&2
+    printf '此选项需要菜单 1 或 8 安装生成的 HY2 导入链接。\n' >&2
     return 1
   fi
   read -rp '备用域名（需要解析到同一台 VPS）：' domain
@@ -264,10 +264,10 @@ show_domain_alias() {
 printf '\nHY2+ VPS 管理菜单\n'
 printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
   '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' \
-  '7) 生成备用域名导入链接' '0) 退出'
+  '7) 生成备用域名导入链接' '8) 安装 HY2 + Gecko（需要客户端支持）' '0) 退出'
 read -rp '请选择 [1]：' choice
 case "${choice:-1}" in
-  1) install_server standard ;;
+  1) install_server salamander ;;
   2) start_service ;;
   3) systemctl status "$service" --no-pager ;;
   4) "${admin[@]}" journalctl -u "$service" -n 50 --no-pager ;;
@@ -280,6 +280,7 @@ case "${choice:-1}" in
     ;;
   6) install_server private ;;
   7) show_domain_alias ;;
+  8) install_server gecko ;;
   0) exit 0 ;;
   *) printf '无效选项。\n' >&2; exit 2 ;;
 esac
