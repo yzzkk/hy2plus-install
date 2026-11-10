@@ -42,20 +42,21 @@ show_private_link() {
     printf '无法从现有客户端配置生成 private-v1 链接。\n' >&2
     return 1
   fi
-  printf 'private-v1 分享链接（使用本脚本的 import-private 导入）：\n'
-  printf 'hysteria2://%s@%s/?insecure=0&sni=%s&alpn=h3&obfs=private-v1&obfs-password=%s#hy2plus\n' \
+  printf 'private-v1 专用链接（使用本脚本的 import-private 导入）：\n'
+  printf 'hy2plus://%s@%s/?insecure=0&sni=%s&alpn=h3&obfs=private-v1&obfs-password=%s#hy2plus\n' \
     "$auth" "$address" "$sni" "$key"
 }
 
 import_private_link() (
   local uri port
-  local pattern='^hysteria2://([0-9a-f]{48})@([A-Za-z0-9.-]+):([0-9]{1,5})/\?insecure=0&sni=([A-Za-z0-9.-]+)&alpn=h3&obfs=private-v1&obfs-password=([0-9a-f]{64})#hy2plus$'
+  local pattern='^hy2plus://([0-9a-f]{48})@([A-Za-z0-9.-]+):([0-9]{1,5})/\?insecure=0&sni=([A-Za-z0-9.-]+)&alpn=h3&obfs=private-v1&obfs-password=([0-9a-f]{64})#hy2plus$'
   if [[ $# -ne 1 || -z $1 ]]; then
     printf '用法：bash install.sh import-private client.yaml\n' >&2
     exit 2
   fi
   IFS= read -rsp '粘贴 private-v1 链接后按回车：' uri
   if [[ -t 0 ]]; then printf '\n' >&2; fi
+  if [[ $uri == hysteria2://* ]]; then uri="hy2plus://${uri#hysteria2://}"; fi
   if [[ ! $uri =~ $pattern ]]; then
     printf '链接格式无效，请完整复制安装器生成的 private-v1 链接。\n' >&2
     exit 2
@@ -448,7 +449,7 @@ uninstall_server() {
 
 printf '\nHY2+ VPS 管理菜单\n'
 printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
-  '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' \
+  '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1（需要配套客户端）' \
   '7) 生成备用域名导入链接' '8) 安装 HY2 + Gecko（需要客户端支持）' \
   '9) 卸载 HY2+' '10) 安装标准 HY2（无混淆，输出可导入链接）' \
   '11) 将现有 private-v1 迁移为标准 HY2' '0) 退出'
