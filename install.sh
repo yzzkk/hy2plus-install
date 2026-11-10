@@ -25,16 +25,19 @@ start_service() {
     "${admin[@]}" journalctl -u "$service" -n 30 --no-pager
     return 1
   fi
-  printf 'HY2 服务已启动。\n'
+  printf 'HY2 服务已收到启动请求。\n'
 }
 
 wait_for_listener() {
-  local port=$1 attempt pid sockets
+  local port=$1 attempt invocation ready_log
   for ((attempt=0; attempt<90; attempt++)); do
     if ! systemctl is-active --quiet "$service"; then break; fi
-    pid=$(systemctl show -p MainPID --value "$service")
-    sockets=$("${admin[@]}" ss -H -lunp "sport = :$port")
-    if [[ $pid != 0 && $sockets == *"pid=$pid,"* ]]; then return 0; fi
+    invocation=$(systemctl show -p InvocationID --value "$service")
+    if [[ $invocation =~ ^[0-9a-f]{32}$ ]]; then
+      ready_log=$("${admin[@]}" journalctl --no-pager -q -o cat -n 1 \
+        --grep='server up and running' "_SYSTEMD_INVOCATION_ID=$invocation")
+      if [[ -n $ready_log ]]; then return 0; fi
+    fi
     sleep 2
   done
   printf '服务未在 UDP %s 就绪，请检查签发或启动日志。\n' "$port" >&2
