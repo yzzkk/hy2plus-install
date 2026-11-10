@@ -57,8 +57,8 @@ install_server() (
   read -rp 'VPS 域名：' domain
   [[ $domain =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9]+$ ]] ||
     { printf '域名格式无效。\n' >&2; exit 1; }
-  read -rp 'UDP 端口 [4443]：' port
-  port=${port:-4443}
+  read -rp 'UDP 端口 [8443]：' port
+  port=${port:-8443}
   if [[ ! $port =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then
     printf '请输入 1024 至 65535 之间的端口。\n' >&2
     exit 1
