@@ -6,7 +6,7 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/yzzkk/hy2plus-install/main/install.sh)
 ```
 
-支持使用 systemd 的 Linux amd64 和 arm64。首次安装时填写 VPS 域名和 UDP 端口（默认 4443），然后选择证书方式。默认使用 Let’s Encrypt 自动签发并续期，也可以输入已有 TLS 证书和私钥的绝对路径。若缺少依赖，请先安装 `curl`、`ca-certificates`、`openssl` 和 `iproute2`。安装器会校验 v0.1.0 二进制的 SHA-256，生成配置并启动服务。
+支持使用 systemd 的 Linux amd64 和 arm64。首次安装时填写 VPS 域名和 UDP 端口（默认 8443），然后选择证书方式。默认使用 Let’s Encrypt 自动签发并续期，也可以输入已有 TLS 证书和私钥的绝对路径。若缺少依赖，请先安装 `curl`、`ca-certificates`、`openssl` 和 `iproute2`。安装器会校验 v0.1.0 二进制的 SHA-256，生成配置并启动服务。
 
 - **菜单 1：HY2 + Salamander。** 启动后显示带有 `obfs=salamander` 和 `obfs-password` 的 `hysteria2://` 链接，可导入支持这两个参数的 sing-box 图形客户端。TLS 验证保持开启，需要客户端信任证书链。
 - **菜单 8：HY2 + Gecko。** 在 Salamander 基础上，将 QUIC 握手数据报拆分为带随机填充的片段。导入链接使用 `obfs=gecko`，需要客户端内核支持 Gecko，且导入器能读取该参数。后续短头数据包仍使用 Salamander。
