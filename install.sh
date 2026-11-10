@@ -254,6 +254,9 @@ quic:
   disablePathMTUDiscovery: true
 EOF
     write_private_client_config "$domain:$port" "$proxy_password" "$domain" "$shared_key" > "$tmp/client.yaml"
+  elif [[ $mode == standard ]]; then
+    printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3#hy2\n' \
+      "$proxy_password" "$domain" "$port" "$domain" > "$tmp/client-uri.txt"
   else
     obfs_password=$(openssl rand -hex 24)
     cat >> "$tmp/config.yaml" <<EOF
@@ -292,7 +295,7 @@ show_domain_alias() {
   require_commands openssl grep
   local uri domain auth port suffix pattern
   if ! "${admin[@]}" test -r "$config_dir/client-uri.txt"; then
-    printf '此选项需要菜单 1 或 8 安装生成的 HY2 导入链接。\n' >&2
+    printf '此选项需要菜单 1、8 或 10 安装生成的 HY2 导入链接。\n' >&2
     return 1
   fi
   read -rp '备用域名（需要解析到同一台 VPS）：' domain
@@ -372,7 +375,7 @@ printf '\nHY2+ VPS 管理菜单\n'
 printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
   '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' \
   '7) 生成备用域名导入链接' '8) 安装 HY2 + Gecko（需要客户端支持）' \
-  '9) 卸载 HY2+' '0) 退出'
+  '9) 卸载 HY2+' '10) 安装标准 HY2（无混淆，输出可导入链接）' '0) 退出'
 read -rp '请选择 [1]：' choice
 case "${choice:-1}" in
   1) install_server salamander ;;
@@ -392,6 +395,7 @@ case "${choice:-1}" in
   7) show_domain_alias ;;
   8) install_server gecko ;;
   9) uninstall_server ;;
+  10) install_server standard ;;
   0) exit 0 ;;
   *) printf '无效选项。\n' >&2; exit 2 ;;
 esac
