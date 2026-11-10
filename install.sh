@@ -28,9 +28,23 @@ start_service() {
   printf 'HY2 服务已启动。\n'
 }
 
+wait_for_listener() {
+  local port=$1 attempt pid sockets
+  for ((attempt=0; attempt<90; attempt++)); do
+    if ! systemctl is-active --quiet "$service"; then break; fi
+    pid=$(systemctl show -p MainPID --value "$service")
+    sockets=$("${admin[@]}" ss -H -lunp "sport = :$port")
+    if [[ $pid != 0 && $sockets == *"pid=$pid,"* ]]; then return 0; fi
+    sleep 2
+  done
+  printf '服务未在 UDP %s 就绪，请检查签发或启动日志。\n' "$port" >&2
+  "${admin[@]}" journalctl -u "$service" -n 30 --no-pager
+  return 1
+}
+
 install_server() (
   mode=$1
-  require_commands curl sha256sum openssl systemctl install grep
+  require_commands curl sha256sum openssl systemctl install grep ss
   if (( EUID != 0 )); then require_commands sudo; sudo -v; fi
   if "${admin[@]}" test -e "$config_dir/config.yaml"; then
     printf '已有配置。启动现有服务可选择 2。\n' >&2
@@ -47,21 +61,35 @@ install_server() (
     exit 1
   fi
   port=$((10#$port))
-  read -rp '完整证书 fullchain.pem 的绝对路径：' cert
-  read -rp '私钥 privkey.pem 的绝对路径：' cert_key
-  [[ $cert = /* && $cert_key = /* ]] ||
-    { printf '请填写证书和私钥的绝对路径。\n' >&2; exit 1; }
-
-  cert_pub=$("${admin[@]}" openssl x509 -in "$cert" -noout -pubkey)
-  key_pub=$("${admin[@]}" openssl pkey -in "$cert_key" -passin pass: -pubout)
-  [[ $cert_pub == "$key_pub" ]] ||
-    { printf '证书与私钥不匹配。\n' >&2; exit 1; }
-  "${admin[@]}" openssl x509 -in "$cert" -noout -checkend 0
-  if ! "${admin[@]}" openssl x509 -in "$cert" -noout -checkhost "$domain" |
-      grep -Fqx "Hostname $domain does match certificate"; then
-    printf '证书与域名不匹配。\n' >&2
-    exit 1
-  fi
+  read -rp '证书方式 [1=自动签发并续期 / 2=使用已有证书，默认 1]：' cert_mode
+  cert_mode=${cert_mode:-1}
+  case "$cert_mode" in
+    1)
+      if [[ -n $(ss -H -ltn 'sport = :80') ]]; then
+        printf 'TCP 80 已有服务监听。请选择已有证书，或释放 TCP 80 后重试。\n' >&2
+        exit 1
+      fi
+      printf '自动签发需要域名解析到本机，且公网 TCP 80 可访问。\n'
+      ;;
+    2)
+    read -rp '完整证书 fullchain.pem 的绝对路径：' cert
+    read -rp '私钥 privkey.pem 的绝对路径：' cert_key
+    [[ $cert = /* && $cert_key = /* ]] ||
+      { printf '请填写证书和私钥的绝对路径。\n' >&2; exit 1; }
+  
+    cert_pub=$("${admin[@]}" openssl x509 -in "$cert" -noout -pubkey)
+    key_pub=$("${admin[@]}" openssl pkey -in "$cert_key" -passin pass: -pubout)
+    [[ $cert_pub == "$key_pub" ]] ||
+      { printf '证书与私钥不匹配。\n' >&2; exit 1; }
+    "${admin[@]}" openssl x509 -in "$cert" -noout -checkend 0
+    if ! "${admin[@]}" openssl x509 -in "$cert" -noout -checkhost "$domain" |
+        grep -Fqx "Hostname $domain does match certificate"; then
+      printf '证书与域名不匹配。\n' >&2
+      exit 1
+    fi
+      ;;
+    *) printf '无效的证书方式。\n' >&2; exit 2 ;;
+  esac
 
   case "$(uname -s)/$(uname -m)" in
     Linux/x86_64)
@@ -81,7 +109,8 @@ install_server() (
     "https://github.com/$repo/releases/download/$version/$asset" -o "$tmp/$asset"
   printf '%s  %s\n' "$checksum" "$tmp/$asset" | sha256sum --check -
 
-  cat > "$tmp/hy2plus.service" <<'UNIT'
+  {
+  cat <<'UNIT'
 [Unit]
 Description=HY2 / HY2+ server
 Wants=network-online.target
@@ -92,8 +121,21 @@ Type=simple
 DynamicUser=yes
 NoNewPrivileges=yes
 LoadCredential=config.yaml:/etc/hy2plus/config.yaml
+UNIT
+  if [[ $cert_mode == 1 ]]; then
+    cat <<'UNIT'
+StateDirectory=hy2plus
+StateDirectoryMode=0700
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+UNIT
+  else
+    cat <<'UNIT'
 LoadCredential=fullchain.pem:/etc/hy2plus/fullchain.pem
 LoadCredential=privkey.pem:/etc/hy2plus/privkey.pem
+UNIT
+  fi
+  cat <<'UNIT'
 ExecStart=/usr/local/bin/hy2plus server -c %d/config.yaml
 Restart=on-failure
 RestartSec=3s
@@ -101,6 +143,7 @@ RestartSec=3s
 [Install]
 WantedBy=multi-user.target
 UNIT
+  } > "$tmp/hy2plus.service"
 
   "${admin[@]}" install -d -m 0700 "$config_dir"
   "${admin[@]}" install -m 0755 "$tmp/$asset" /usr/local/bin/hy2plus
@@ -110,13 +153,26 @@ UNIT
   proxy_password=$(openssl rand -hex 24)
   cat > "$tmp/config.yaml" <<EOF
 listen: ":$port"
-tls:
-  cert: /run/credentials/hy2plus.service/fullchain.pem
-  key: /run/credentials/hy2plus.service/privkey.pem
 auth:
   type: password
   password: "$proxy_password"
 EOF
+  if [[ $cert_mode == 1 ]]; then
+    cat >> "$tmp/config.yaml" <<EOF
+acme:
+  domains:
+    - "$domain"
+  ca: letsencrypt
+  type: http
+  dir: /var/lib/hy2plus/acme
+EOF
+  else
+    cat >> "$tmp/config.yaml" <<'EOF'
+tls:
+  cert: /run/credentials/hy2plus.service/fullchain.pem
+  key: /run/credentials/hy2plus.service/privkey.pem
+EOF
+  fi
 
   if [[ $mode == private ]]; then
     shared_key=$(openssl rand -hex 32)
@@ -152,8 +208,10 @@ EOF
       "$proxy_password" "$domain" "$port" "$domain" "$obfs_password" > "$tmp/client-uri.txt"
   fi
 
-  "${admin[@]}" install -m 0600 "$cert" "$config_dir/fullchain.pem"
-  "${admin[@]}" install -m 0600 "$cert_key" "$config_dir/privkey.pem"
+  if [[ $cert_mode == 2 ]]; then
+    "${admin[@]}" install -m 0600 "$cert" "$config_dir/fullchain.pem"
+    "${admin[@]}" install -m 0600 "$cert_key" "$config_dir/privkey.pem"
+  fi
   if [[ $mode == private ]]; then
     "${admin[@]}" install -m 0600 "$tmp/client.yaml" "$config_dir/client.yaml"
   else
@@ -161,6 +219,7 @@ EOF
   fi
   "${admin[@]}" install -m 0600 "$tmp/config.yaml" "$config_dir/config.yaml"
   start_service
+  wait_for_listener "$port"
   printf '请在 VPS 防火墙和云安全组放行 UDP %s。\n' "$port"
   if [[ $mode == private ]]; then
     printf '客户端配置保存在 %s/client.yaml，可通过菜单 5 查看。\n' "$config_dir"
@@ -184,7 +243,7 @@ show_domain_alias() {
   fi
   if ! "${admin[@]}" openssl x509 -in "$config_dir/fullchain.pem" -noout -checkhost "$domain" |
       grep -Fqx "Hostname $domain does match certificate"; then
-    printf '当前证书未覆盖备用域名，请先部署覆盖该域名的证书。\n' >&2
+    printf '备用域名需要手动部署的证书，且证书必须覆盖该域名。\n' >&2
     return 1
   fi
   uri=$("${admin[@]}" cat "$config_dir/client-uri.txt")
