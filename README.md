@@ -13,4 +13,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yzzkk/hy2plus-install/main/i
 
 在 VPS 防火墙和云安全组放行安装时选择的 UDP 端口。菜单 **5** 可重新查看导入链接或客户端配置，内容包含连接凭据。已有配置时安装器会停止，防止覆盖正在使用的服务。
 
+给现有 HY2 + Salamander 节点加备用域名时，先让新域名解析到同一台 VPS，并确认当前 TLS 证书覆盖该域名。重新运行安装命令并选 **7**，即可生成新域名的导入链接。生成的链接沿用原节点的端口、认证密码和混淆密码。
+
 安装包与上游许可证见 [v0.1.0 Release](https://github.com/yzzkk/hy2plus-install/releases/tag/v0.1.0)。
