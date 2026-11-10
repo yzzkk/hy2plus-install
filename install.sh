@@ -70,6 +70,11 @@ import_private_link() (
     "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}" > "$1"
 )
 
+write_standard_link() {
+  printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3#hy2\n' \
+    "$1" "$2" "$3" "$4"
+}
+
 if [[ ${1:-} == import-private ]]; then
   shift
   import_private_link "$@"
@@ -255,8 +260,7 @@ quic:
 EOF
     write_private_client_config "$domain:$port" "$proxy_password" "$domain" "$shared_key" > "$tmp/client.yaml"
   elif [[ $mode == standard ]]; then
-    printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s&alpn=h3#hy2\n' \
-      "$proxy_password" "$domain" "$port" "$domain" > "$tmp/client-uri.txt"
+    write_standard_link "$proxy_password" "$domain" "$port" "$domain" > "$tmp/client-uri.txt"
   else
     obfs_password=$(openssl rand -hex 24)
     cat >> "$tmp/config.yaml" <<EOF
@@ -291,11 +295,82 @@ EOF
   fi
 )
 
+migrate_private_to_standard() (
+  local server_config client_config domain port auth key suffix answer backup
+  local header='^server: "([A-Za-z0-9.-]+):([0-9]{1,5})"'$'\n''auth: "([0-9a-f]{48})"'
+  local key_line=$'\n''  privateKey: "([0-9a-f]{64})"'$'\n'
+  require_commands systemctl mktemp cat cp mv tee chmod mkdir rmdir unlink
+  if (( EUID != 0 )); then require_commands sudo; sudo -v; fi
+
+  printf '迁移会短暂重启 HY2，旧 private-v1 客户端需要换用新节点。\n'
+  read -rp '输入 STANDARD 确认迁移：' answer
+  [[ $answer == STANDARD ]] || return 0
+
+  local lock="$config_dir/.migrate-standard"
+  if ! "${admin[@]}" mkdir -m 0700 -- "$lock"; then
+    printf '无法取得迁移锁，请检查安装目录和是否已有迁移在运行。\n' >&2
+    return 1
+  fi
+  trap '
+    for staged in config.yaml client-uri.txt; do
+      if "${admin[@]}" test -f "$lock/$staged"; then
+        "${admin[@]}" unlink "$lock/$staged"
+      fi
+    done
+    "${admin[@]}" rmdir -- "$lock"
+  ' EXIT
+  if "${admin[@]}" test -e "$config_dir/client-uri.txt"; then
+    printf '现有安装已提供 HY2 导入链接，请使用菜单 5 查看。\n'
+    return 1
+  fi
+  server_config=$("${admin[@]}" cat "$config_dir/config.yaml")
+  client_config=$("${admin[@]}" cat "$config_dir/client.yaml")
+  if [[ ! $client_config =~ $header ]]; then
+    printf '客户端配置与安装器生成的 private-v1 格式不符。\n' >&2
+    return 1
+  fi
+  domain=${BASH_REMATCH[1]} port=${BASH_REMATCH[2]} auth=${BASH_REMATCH[3]}
+  if [[ ! $client_config =~ $key_line ]]; then
+    printf '客户端配置缺少有效的 private-v1 密钥。\n' >&2
+    return 1
+  fi
+  key=${BASH_REMATCH[1]}
+  suffix=$(printf 'obfs:\n  type: private-v1\n  privateKey: "%s"\nquic:\n  disablePathMTUDiscovery: true' "$key")
+  if [[ $client_config != "$(write_private_client_config "$domain:$port" "$auth" "$domain" "$key")" ||
+        $server_config != "listen: \":$port\""$'\n''auth:'$'\n''  type: password'$'\n'"  password: \"$auth\""$'\n'*$'\n'"$suffix" ]]; then
+    printf '现有服务端和客户端配置不符合自动迁移条件。\n' >&2
+    return 1
+  fi
+  if ! systemctl is-active --quiet "$service"; then
+    printf '请先用菜单 2 启动现有 HY2 服务，再迁移。\n' >&2
+    return 1
+  fi
+
+  backup=$("${admin[@]}" mktemp -d "$config_dir/private-v1-backup.XXXXXXXX")
+  "${admin[@]}" cp -p -- "$config_dir/config.yaml" "$config_dir/client.yaml" "$backup/"
+  printf '%s\n' "${server_config%$'\n'"$suffix"}" | "${admin[@]}" tee "$lock/config.yaml" >/dev/null
+  write_standard_link "$auth" "$domain" "$port" "$domain" | "${admin[@]}" tee "$lock/client-uri.txt" >/dev/null
+  "${admin[@]}" chmod 0600 "$lock/config.yaml" "$lock/client-uri.txt"
+  "${admin[@]}" mv -- "$lock/config.yaml" "$config_dir/config.yaml"
+  if "${admin[@]}" systemctl restart "$service" && wait_for_listener "$port" &&
+     "${admin[@]}" mv -- "$lock/client-uri.txt" "$config_dir/client-uri.txt"; then
+    printf '已迁移为标准 HY2。原配置备份：%s\n' "$backup"
+    "${admin[@]}" cat "$config_dir/client-uri.txt"
+    return
+  fi
+
+  printf '迁移失败，正在恢复原配置。备份：%s\n' "$backup" >&2
+  "${admin[@]}" cp -p -- "$backup/config.yaml" "$lock/config.yaml"
+  "${admin[@]}" mv -- "$lock/config.yaml" "$config_dir/config.yaml"
+  "${admin[@]}" systemctl restart "$service"
+  return 1
+)
+
 show_domain_alias() {
   require_commands openssl grep
   local uri domain auth port suffix pattern
   if ! "${admin[@]}" test -r "$config_dir/client-uri.txt"; then
-    printf '此选项需要菜单 1、8 或 10 安装生成的 HY2 导入链接。\n' >&2
+    printf '此选项需要菜单 1、8、10 或 11 生成的 HY2 导入链接。\n' >&2
     return 1
   fi
   read -rp '备用域名（需要解析到同一台 VPS）：' domain
@@ -375,7 +450,8 @@ printf '\nHY2+ VPS 管理菜单\n'
 printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
   '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' \
   '7) 生成备用域名导入链接' '8) 安装 HY2 + Gecko（需要客户端支持）' \
-  '9) 卸载 HY2+' '10) 安装标准 HY2（无混淆，输出可导入链接）' '0) 退出'
+  '9) 卸载 HY2+' '10) 安装标准 HY2（无混淆，输出可导入链接）' \
+  '11) 将现有 private-v1 迁移为标准 HY2' '0) 退出'
 read -rp '请选择 [1]：' choice
 case "${choice:-1}" in
   1) install_server salamander ;;
@@ -396,6 +472,7 @@ case "${choice:-1}" in
   8) install_server gecko ;;
   9) uninstall_server ;;
   10) install_server standard ;;
+  11) migrate_private_to_standard ;;
   0) exit 0 ;;
   *) printf '无效选项。\n' >&2; exit 2 ;;
 esac
