@@ -170,9 +170,39 @@ EOF
   fi
 )
 
+show_domain_alias() {
+  require_commands openssl grep
+  local uri domain auth port suffix pattern
+  if ! "${admin[@]}" test -r "$config_dir/client-uri.txt"; then
+    printf '此选项需要菜单 1 安装生成的 HY2 导入链接。\n' >&2
+    return 1
+  fi
+  read -rp '备用域名（需要解析到同一台 VPS）：' domain
+  if [[ ! $domain =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9]+$ ]]; then
+    printf '域名格式无效。\n' >&2
+    return 1
+  fi
+  if ! "${admin[@]}" openssl x509 -in "$config_dir/fullchain.pem" -noout -checkhost "$domain" |
+      grep -Fqx "Hostname $domain does match certificate"; then
+    printf '当前证书未覆盖备用域名，请先部署覆盖该域名的证书。\n' >&2
+    return 1
+  fi
+  uri=$("${admin[@]}" cat "$config_dir/client-uri.txt")
+  pattern='^hysteria2://([0-9a-f]+)@[A-Za-z0-9.-]+:([0-9]+)/\?insecure=0&sni=[A-Za-z0-9.-]+([&#].*)?$'
+  if [[ ! $uri =~ $pattern ]]; then
+    printf '现有链接格式不符合本安装器的导出格式。\n' >&2
+    return 1
+  fi
+  auth=${BASH_REMATCH[1]}
+  port=${BASH_REMATCH[2]}
+  suffix=${BASH_REMATCH[3]:-}
+  printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s%s\n' "$auth" "$domain" "$port" "$domain" "$suffix"
+}
+
 printf '\nHY2+ VPS 管理菜单\n'
 printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
-  '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' '0) 退出'
+  '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' \
+  '7) 生成备用域名导入链接' '0) 退出'
 read -rp '请选择 [1]：' choice
 case "${choice:-1}" in
   1) install_server standard ;;
@@ -187,6 +217,7 @@ case "${choice:-1}" in
     fi
     ;;
   6) install_server private ;;
+  7) show_domain_alias ;;
   0) exit 0 ;;
   *) printf '无效选项。\n' >&2; exit 2 ;;
 esac
