@@ -9,6 +9,73 @@ service=hy2plus
 admin=()
 if (( EUID != 0 )); then admin=(sudo); fi
 
+write_private_client_config() {
+  cat <<EOF
+server: "$1"
+auth: "$2"
+tls:
+  sni: "$3"
+obfs:
+  type: private-v1
+  privateKey: "$4"
+quic:
+  disablePathMTUDiscovery: true
+socks5:
+  listen: "127.0.0.1:1080"
+EOF
+}
+
+show_private_link() {
+  local config=$1 address auth sni key
+  local address_pattern='^server: "([A-Za-z0-9.-]+:[0-9]{1,5})"$'
+  local auth_pattern='^auth: "([0-9a-f]{48})"$'
+  local sni_pattern='^  sni: "([A-Za-z0-9.-]+)"$'
+  local key_pattern='^  privateKey: "([0-9a-f]{64})"$'
+  local line
+  while IFS= read -r line; do
+    if [[ $line =~ $address_pattern ]]; then address=${BASH_REMATCH[1]}; fi
+    if [[ $line =~ $auth_pattern ]]; then auth=${BASH_REMATCH[1]}; fi
+    if [[ $line =~ $sni_pattern ]]; then sni=${BASH_REMATCH[1]}; fi
+    if [[ $line =~ $key_pattern ]]; then key=${BASH_REMATCH[1]}; fi
+  done <<< "$config"
+  if [[ -z ${address:-} || -z ${auth:-} || -z ${sni:-} || -z ${key:-} ]]; then
+    printf '无法从现有客户端配置生成 private-v1 链接。\n' >&2
+    return 1
+  fi
+  printf 'private-v1 分享链接（使用本脚本的 import-private 导入）：\n'
+  printf 'hysteria2://%s@%s/?insecure=0&sni=%s&alpn=h3&obfs=private-v1&obfs-password=%s#hy2plus\n' \
+    "$auth" "$address" "$sni" "$key"
+}
+
+import_private_link() (
+  local uri port
+  local pattern='^hysteria2://([0-9a-f]{48})@([A-Za-z0-9.-]+):([0-9]{1,5})/\?insecure=0&sni=([A-Za-z0-9.-]+)&alpn=h3&obfs=private-v1&obfs-password=([0-9a-f]{64})#hy2plus$'
+  if [[ $# -ne 1 || -z $1 ]]; then
+    printf '用法：bash install.sh import-private client.yaml\n' >&2
+    exit 2
+  fi
+  IFS= read -rsp '粘贴 private-v1 链接后按回车：' uri
+  if [[ -t 0 ]]; then printf '\n' >&2; fi
+  if [[ ! $uri =~ $pattern ]]; then
+    printf '链接格式无效，请完整复制安装器生成的 private-v1 链接。\n' >&2
+    exit 2
+  fi
+  port=$((10#${BASH_REMATCH[3]}))
+  if (( port < 1024 || port > 65535 )); then
+    printf '链接端口无效。\n' >&2
+    exit 2
+  fi
+  set -o noclobber
+  write_private_client_config "${BASH_REMATCH[2]}:$port" "${BASH_REMATCH[1]}" \
+    "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}" > "$1"
+)
+
+if [[ ${1:-} == import-private ]]; then
+  shift
+  import_private_link "$@"
+  exit
+fi
+
 require_commands() {
   for cmd in "$@"; do
     command -v "$cmd" >/dev/null || { printf '缺少命令：%s\n' "$cmd" >&2; return 1; }
@@ -186,19 +253,7 @@ obfs:
 quic:
   disablePathMTUDiscovery: true
 EOF
-    cat > "$tmp/client.yaml" <<EOF
-server: "$domain:$port"
-auth: "$proxy_password"
-tls:
-  sni: "$domain"
-obfs:
-  type: private-v1
-  privateKey: "$shared_key"
-quic:
-  disablePathMTUDiscovery: true
-socks5:
-  listen: "127.0.0.1:1080"
-EOF
+    write_private_client_config "$domain:$port" "$proxy_password" "$domain" "$shared_key" > "$tmp/client.yaml"
   else
     obfs_password=$(openssl rand -hex 24)
     cat >> "$tmp/config.yaml" <<EOF
@@ -226,6 +281,7 @@ EOF
   printf '请在 VPS 防火墙和云安全组放行 UDP %s。\n' "$port"
   if [[ $mode == private ]]; then
     printf '客户端配置保存在 %s/client.yaml，可通过菜单 5 查看。\n' "$config_dir"
+    show_private_link "$(cat "$tmp/client.yaml")"
   else
     printf '\n复制下面的链接到支持 HY2 链接导入的客户端。\n'
     cat "$tmp/client-uri.txt"
@@ -327,7 +383,9 @@ case "${choice:-1}" in
     if "${admin[@]}" test -f "$config_dir/client-uri.txt"; then
       "${admin[@]}" cat "$config_dir/client-uri.txt"
     else
-      "${admin[@]}" cat "$config_dir/client.yaml"
+      client_config=$("${admin[@]}" cat "$config_dir/client.yaml")
+      printf '%s\n\n' "$client_config"
+      show_private_link "$client_config"
     fi
     ;;
   6) install_server private ;;
