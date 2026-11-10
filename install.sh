@@ -261,10 +261,62 @@ show_domain_alias() {
   printf 'hysteria2://%s@%s:%s/?insecure=0&sni=%s%s\n' "$auth" "$domain" "$port" "$domain" "$suffix"
 }
 
+uninstall_server() {
+  local unit_file=/etc/systemd/system/hy2plus.service
+  local binary=/usr/local/bin/hy2plus
+  local fragment backup_dir answer
+
+  require_commands systemctl grep mktemp mv rm
+  if (( EUID != 0 )); then require_commands sudo; sudo -v; fi
+
+  systemctl show -p Version --value >/dev/null
+  if ! fragment=$(systemctl show -p FragmentPath --value "$service" 2>/dev/null); then
+    if "${admin[@]}" test -e "$unit_file"; then
+      printf '无法确认服务状态，卸载已停止。\n' >&2
+      return 1
+    fi
+    fragment=
+  fi
+  if [[ -n $fragment && $fragment != "$unit_file" ]]; then
+    printf '服务来自其他安装路径：%s。请用对应安装方式卸载。\n' "$fragment" >&2
+    return 1
+  fi
+  if "${admin[@]}" test -e "$unit_file" &&
+     ! "${admin[@]}" grep -Fxq 'ExecStart=/usr/local/bin/hy2plus server -c %d/config.yaml' "$unit_file"; then
+    printf '服务文件与本安装器生成的文件不匹配。\n' >&2
+    return 1
+  fi
+  if ! "${admin[@]}" test -e "$unit_file" &&
+     ! "${admin[@]}" test -e "$binary" &&
+     ! "${admin[@]}" test -d "$config_dir"; then
+    printf 'HY2+ 已卸载。\n'
+    return 0
+  fi
+
+  read -rp '卸载会中断代理连接。输入 UNINSTALL 确认：' answer
+  if [[ $answer != UNINSTALL ]]; then
+    printf '已取消卸载。\n'
+    return 0
+  fi
+
+  if [[ -n $fragment ]]; then
+    "${admin[@]}" systemctl disable --now "$service"
+  fi
+  if "${admin[@]}" test -d "$config_dir"; then
+    backup_dir=$("${admin[@]}" mktemp -d /etc/hy2plus-backup.XXXXXXXX)
+    "${admin[@]}" mv -T -- "$config_dir" "$backup_dir/config"
+    printf '配置备份：%s/config\n' "$backup_dir"
+  fi
+  "${admin[@]}" rm -f -- "$unit_file" "$binary"
+  "${admin[@]}" systemctl daemon-reload
+  printf 'HY2+ 已卸载。自动签发的证书仍保存在 /var/lib/hy2plus/acme（如果此前启用）。\n'
+}
+
 printf '\nHY2+ VPS 管理菜单\n'
 printf '%s\n' '1) 安装 HY2 + Salamander（输出可导入链接）' '2) 启用并启动已有服务' \
   '3) 查看服务状态' '4) 查看最近日志' '5) 显示导入链接或客户端配置' '6) 安装 HY2+ private-v1' \
-  '7) 生成备用域名导入链接' '8) 安装 HY2 + Gecko（需要客户端支持）' '0) 退出'
+  '7) 生成备用域名导入链接' '8) 安装 HY2 + Gecko（需要客户端支持）' \
+  '9) 卸载 HY2+' '0) 退出'
 read -rp '请选择 [1]：' choice
 case "${choice:-1}" in
   1) install_server salamander ;;
@@ -281,6 +333,7 @@ case "${choice:-1}" in
   6) install_server private ;;
   7) show_domain_alias ;;
   8) install_server gecko ;;
+  9) uninstall_server ;;
   0) exit 0 ;;
   *) printf '无效选项。\n' >&2; exit 2 ;;
 esac
